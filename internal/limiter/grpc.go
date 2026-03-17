@@ -3,17 +3,24 @@ package limiter
 import (
 	"context"
 	"fmt"
+	"io"
+	"log"
+	"net"
 	"rate-limiter/proto"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 type GRPCRateLimiter struct {
 	proto.UnimplementedLimiterSyncServer
 	nodeID      string
 	globalLimit int
-	localLimit  int
 
 	// Local state
 	localCounts [60]int64
@@ -24,14 +31,28 @@ type GRPCRateLimiter struct {
 	mirrors map[string]map[int64]int64 // [nodeID][timestamp]count
 }
 
-func NewGRPCContext(globalLimit int, peers []string) *GRPCRateLimiter {
-	numOfNodes := len(peers) + 1
-	return &GRPCRateLimiter{
-		nodeID:      fmt.Sprintf("node-%d", time.Now().UnixNano()),
+func NewGRPCContext(port string, globalLimit int, peers []string) *GRPCRateLimiter {
+	g := &GRPCRateLimiter{
+		nodeID:      fmt.Sprintf("node-%s", port), // Simple ID based on port
 		globalLimit: globalLimit,
-		localLimit:  globalLimit / numOfNodes,
 		mirrors:     make(map[string]map[int64]int64),
 	}
+
+	portInt, _ := strconv.Atoi(port)
+	grpcAddr := ":" + fmt.Sprintf("%d", portInt+1000)
+	go g.serveGRPC(grpcAddr)
+
+	ctx := context.Background()
+	for _, peer := range peers {
+		if peer == "" {
+			continue
+		}
+		go g.maintainPeerConnection(ctx, peer)
+	}
+
+	go g.startSweeper(ctx)
+
+	return g
 }
 
 // Allow will implement the RateLimiter interface
@@ -58,7 +79,7 @@ func (g *GRPCRateLimiter) Allow(ctx context.Context, userID string) (bool, error
 	}
 	g.mu.RUnlock()
 
-	if localSum+peerSum > int64(g.globalLimit) {
+	if localSum+peerSum >= int64(g.globalLimit) {
 		return false, nil
 	}
 
@@ -73,40 +94,154 @@ func (g *GRPCRateLimiter) Allow(ctx context.Context, userID string) (bool, error
 	return true, nil
 }
 
-// func (l *GRPCRateLimiter) startGossipLoop(ctx context.Context, peerAddr string) {
-// 	// 1. Establish the gRPC connection
-// 	conn, _ := grpc.Dial(peerAddr, grpc.WithInsecure())
-// 	client := proto.NewLimiterSyncClient(conn)
-// 	stream, _ := client.SyncBuckets(ctx)
+func (g *GRPCRateLimiter) SyncBuckets(stream proto.LimiterSync_SyncBucketsServer) error {
+	for {
+		update, err := stream.Recv()
+		if err == io.EOF {
+			return stream.SendAndClose(&proto.SyncResponse{Acknowledged: true})
+		}
+		if err != nil {
+			return err
+		}
 
-// 	ticker := time.NewTicker(100 * time.Millisecond)
+		// Update the mirror for this peer
+		g.mu.Lock()
+		if _, ok := g.mirrors[update.NodeId]; !ok {
+			g.mirrors[update.NodeId] = make(map[int64]int64)
+		}
+		g.mirrors[update.NodeId][update.Timestamp] = update.TotalCount
+		g.mu.Unlock()
+	}
+}
 
-// 	go func() {
-// 		for {
-// 			select {
-// 			case <-ticker.C:
-// 				// 2. Collect local changes and send them
-// 				l.broadcastLatestBuckets(stream)
-// 			case <-ctx.Done():
-// 				return
-// 			}
-// 		}
-// 	}()
-// }
+func (g *GRPCRateLimiter) serveGRPC(addr string) {
+	lis, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("gRPC server failed to listen: %v", err)
+	}
 
-// func (l *GRPCRateLimiter) broadcastLatestBuckets(stream proto.LimiterSync_SyncBucketsClient) {
-// 	now := time.Now().Unix()
+	server := grpc.NewServer()
+	proto.RegisterLimiterSyncServer(server, g)
 
-// 	// We only send the last 2-3 buckets to ensure peers are up to date
-// 	// even if a single packet was dropped earlier.
-// 	for offset := int64(0); offset < 3; offset++ {
-// 		ts := now - offset
-// 		count := l.localBuffer.GetCountForTimestamp(ts)
+	log.Printf("gRPC Sync Server listening on %s", addr)
+	if err := server.Serve(lis); err != nil {
+		log.Fatalf("gRPC server failed: %v", err)
+	}
+}
 
-// 		stream.Send(&proto.BucketUpdate{
-// 			NodeId:     l.nodeID,
-// 			Timestamp:  ts,
-// 			TotalCount: count,
-// 		})
-// 	}
-// }
+func (g *GRPCRateLimiter) maintainPeerConnection(ctx context.Context, addr string) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			conn, err := grpc.NewClient(
+				addr,
+				grpc.WithTransportCredentials(insecure.NewCredentials()),
+			)
+			if err != nil {
+				log.Printf("Client creation failed for %s: %v", addr, err)
+				time.Sleep(2 * time.Second)
+				continue
+			}
+
+			conn.Connect()
+			if !g.waitForReady(ctx, conn) {
+				conn.Close()
+				time.Sleep(2 * time.Second)
+				continue
+			}
+
+			log.Printf("Successfully connected and READY: %s", addr)
+			client := proto.NewLimiterSyncClient(conn)
+
+			err = g.streamUpdates(ctx, client)
+			if err != nil {
+				log.Printf("Stream to %s lost: %v", addr, err)
+			}
+
+			conn.Close()
+			time.Sleep(1 * time.Second)
+		}
+	}
+}
+
+func (g *GRPCRateLimiter) waitForReady(ctx context.Context, conn *grpc.ClientConn) bool {
+	for {
+		state := conn.GetState()
+		if state == connectivity.Ready {
+			return true
+		}
+		if state == connectivity.TransientFailure || state == connectivity.Shutdown {
+			return false
+		}
+		// Wait for the state to change or the context to expire
+		if !conn.WaitForStateChange(ctx, state) {
+			return false // Context cancelled
+		}
+	}
+}
+
+func (g *GRPCRateLimiter) streamUpdates(ctx context.Context, client proto.LimiterSyncClient) error {
+	stream, err := client.SyncBuckets(ctx)
+	if err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			now := time.Now().Unix()
+
+			// We gossip the last 3 seconds of data to handle minor packet loss
+			for i := int64(0); i < 3; i++ {
+				ts := now - i
+				idx := ts % 60
+
+				// g.timestamps can contain 0 and old timestamps
+				actualTs := atomic.LoadInt64(&g.timestamps[idx])
+				if actualTs == ts {
+					count := atomic.LoadInt64(&g.localCounts[idx])
+					err := stream.Send(&proto.BucketUpdate{
+						NodeId:     g.nodeID,
+						Timestamp:  ts,
+						TotalCount: count,
+					})
+					if err != nil {
+						return err // Break and trigger reconnection
+					}
+				}
+			}
+		}
+	}
+}
+
+func (g *GRPCRateLimiter) startSweeper(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Minute)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now().Unix()
+			g.mu.Lock()
+			for nodeID, buckets := range g.mirrors {
+				for ts := range buckets {
+					if now-ts > 60 {
+						delete(buckets, ts)
+					}
+					if len(buckets) == 0 {
+						delete(g.mirrors, nodeID)
+					}
+				}
+			}
+			g.mu.Unlock()
+		}
+	}
+}

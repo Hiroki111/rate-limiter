@@ -31,7 +31,7 @@ func main() {
 	case "grpc":
 		fmt.Printf("Starting in gRPC P2P mode at :%s\n", *port)
 		peerList := strings.Split(*peers, ",")
-		engine = limiter.NewGRPCContext(*limit, peerList)
+		engine = limiter.NewGRPCContext(*port, *limit, peerList)
 
 	default:
 		log.Fatalf("Invalid mode: %s", *mode)
