@@ -231,15 +231,21 @@ func (g *GRPCRateLimiter) startSweeper(ctx context.Context) {
 		case <-ticker.C:
 			now := time.Now().Unix()
 			g.mu.Lock()
+
+			emptyNodeIDs := make([]string, 0)
 			for nodeID, buckets := range g.mirrors {
 				for ts := range buckets {
 					if now-ts > 60 {
 						delete(buckets, ts)
 					}
-					if len(buckets) == 0 {
-						delete(g.mirrors, nodeID)
-					}
 				}
+				if len(buckets) == 0 {
+					emptyNodeIDs = append(emptyNodeIDs, nodeID)
+				}
+			}
+
+			for _, nodeID := range emptyNodeIDs {
+				delete(g.mirrors, nodeID)
 			}
 			g.mu.Unlock()
 		}
