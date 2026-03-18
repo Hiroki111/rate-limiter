@@ -25,6 +25,7 @@ protoc --go_out=. --go_opt=paths=source_relative \
 
 TODO:
 
+- Remove gRPC related code
 - Dockerfile
 - Publish to Docker Hub
 - Unit/integration tests
