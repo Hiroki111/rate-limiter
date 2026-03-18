@@ -4,7 +4,7 @@ How to run
 
 ```
 docker run --name rate-limit-redis -p 6379:6379 -d redis
-go run cmd/rate-limiter/main.go --mode=redis --limit=5
+go run cmd/rate-limiter-redis/main.go --limit=5
 ```
 
 - Eventual consistency mode with gRPC
