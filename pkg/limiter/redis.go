@@ -19,7 +19,6 @@ type RedisRateLimiter struct {
 
 func NewRedisLimiter(client *redis.Client, limit int, window int) *RedisRateLimiter {
 	var st gobreaker.Settings
-	st.Name = "HTTP GET"
 	st.ReadyToTrip = func(counts gobreaker.Counts) bool {
 		failureRatio := float64(counts.TotalFailures) / float64(counts.Requests)
 		return counts.Requests >= 3 && failureRatio >= 0.5
