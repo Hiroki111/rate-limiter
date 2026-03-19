@@ -6,7 +6,7 @@ import (
 	"log"
 	"net/http"
 
-	"rate-limiter-redis/internal/limiter"
+	"rate-limiter-redis/pkg/limiter"
 
 	"github.com/redis/go-redis/v9"
 )
