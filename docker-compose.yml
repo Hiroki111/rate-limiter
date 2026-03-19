@@ -1,0 +1,14 @@
+services:
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  limiter-app:
+    build: .
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+    # Override flags here if needed
+    command: ["--redis-addr=redis:6379", "--limit=5"]

@@ -17,7 +17,7 @@ func main() {
 	limit := flag.Int("limit", 100, "Global requests per minute")
 	flag.Parse()
 
-	fmt.Printf("Starting at :%s\n", *port)
+	fmt.Printf("Starting at :%s with limit %d\n", *port, *limit)
 	redisClient := redis.NewClient(&redis.Options{Addr: *redisAddr})
 	engine := limiter.NewRedisLimiter(redisClient, *limit, 60)
 
