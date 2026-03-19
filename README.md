@@ -25,7 +25,16 @@ protoc --go_out=. --go_opt=paths=source_relative \
 
 TODO:
 
-- Remove gRPC related code
 - Dockerfile
 - Publish to Docker Hub
 - Unit/integration tests
+
+Troubleshooting
+
+```
+# Show all the keys in Redis
+docker exec -it rate-limiter-redis-redis-1 redis-cli KEYS "*"
+
+# Show the time stamp and count
+docker exec -it rate-limiter-redis-redis-1 redis-cli HGETALL <key>
+```

@@ -29,7 +29,6 @@ func main() {
 
 		allowed, err := engine.Allow(r.Context(), userID)
 		if err != nil {
-			// Fail-open logic could be added here
 			http.Error(w, "Internal Limiter Error", 500)
 			return
 		}
