@@ -1,40 +1,78 @@
-How to run
+# rate-limiter-redis
 
-- Strong consistency mode with Redis
+Strongly Consistent rate limiting library for Go, backed by Redis.
+
+Unlike P2P or eventually consistent limiters, `rate-limiter-redis` uses Atomic Lua Scripting to ensure that your limits are strictly enforced across any number of distributed service instances.
+
+## Features
+- Atomic Operations: Zero race conditions via server-side Lua execution.
+- Sliding Window Logic: Accurate counting using Redis Hashes.
+- Fail-Open Protection: Integrated Circuit Breaker ensures your API stays up even if Redis goes down.
+- Thread-Safe: Designed for high-concurrency Go environments.
+
+## Getting Started
+
+### Installation
+
+```
+go get github.com/Hiroki111/rate-limiter-redis
+```
+
+### Library Usage (Go Middleware)
+
+```
+import (
+    "github.com/Hiroki111/rate-limiter-redis/pkg/limiter"
+    "github.com/redis/go-redis/v9"
+)
+
+func main() {
+    // 1. Initialize Redis Client
+    rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+    
+    // 2. Create the Limiter (Limit: 100 requests, Window: 60 seconds)
+    engine := limiter.NewRedisLimiter(rdb, 100, 60)
+    
+    // 3. Use in your HTTP Handler
+    http.HandleFunc("/api/resource", func(w http.ResponseWriter, r *http.Request) {
+        userID := r.URL.Query().Get("user")
+        
+        allowed, err := engine.Allow(r.Context(), userID)
+        if err != nil || !allowed {
+            w.WriteHeader(http.StatusTooManyRequests)
+            return
+        }
+        
+        // Process request...
+    })
+}
+```
+
+See `cmd/server/main.go` to see a working example.
+
+## Local Development & Testing
+
+### Running with Docker
 
 ```
 docker run --name rate-limit-redis -p 6379:6379 -d redis
-go run cmd/rate-limiter-redis/main.go --limit=5
+go run cmd/server/main.go --limit=5
+
+# Open a new terminal and run this to test the limiter
+for i in {1..6}; do curl "http://localhost:8080/api/resource?user=alice"; echo ""; done
 ```
 
-- Eventual consistency mode with gRPC
-
+### Running with Docker Compose
 ```
-# Make sure protc is installed in your machine. Version 3.12.4 or above is recommended.
-# You can confirm if protoc is installed by running:
-protoc --version
-# If this doesn't show a protoc's version, install it.
+# Start Redis and the Limiter Service
+docker-compose up --build
 
-go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-
-protoc --go_out=. --go_opt=paths=source_relative \
-    --go-grpc_out=. --go-grpc_opt=paths=source_relative \
-    proto/limiter.proto
+# Test the limit (set to 5 in docker-compose.yml)
+for i in {1..6}; do curl "http://localhost:8080/api/resource?user=alice"; echo ""; done
 ```
 
-TODO:
-
-- Dockerfile
-- Publish to Docker Hub
-- Unit/integration tests
-
-Troubleshooting
+### Running Unit Tests
 
 ```
-# Show all the keys in Redis
-docker exec -it rate-limiter-redis-redis-1 redis-cli KEYS "*"
-
-# Show the time stamp and count
-docker exec -it rate-limiter-redis-redis-1 redis-cli HGETALL <key>
+go test -v ./pkg/limiter/...
 ```
