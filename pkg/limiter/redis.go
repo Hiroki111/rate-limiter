@@ -15,6 +15,7 @@ type RedisRateLimiter struct {
 	cb     *gobreaker.CircuitBreaker[int]
 	limit  int
 	window int
+	now    func() int64
 }
 
 func NewRedisLimiter(client *redis.Client, limit int, window int) *RedisRateLimiter {
@@ -31,12 +32,15 @@ func NewRedisLimiter(client *redis.Client, limit int, window int) *RedisRateLimi
 		cb:     cb,
 		limit:  limit,
 		window: window,
+		now: func() int64 {
+			return time.Now().Unix()
+		},
 	}
 }
 
 func (r *RedisRateLimiter) Allow(ctx context.Context, userID string) (bool, error) {
 	result, err := r.cb.Execute(func() (int, error) {
-		now := time.Now().Unix()
+		now := r.now()
 		return r.script.Run(ctx, r.client, []string{"limiter:" + userID}, now, r.window, r.limit).Int()
 	})
 

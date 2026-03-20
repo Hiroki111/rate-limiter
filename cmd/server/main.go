@@ -15,11 +15,12 @@ func main() {
 	port := flag.String("port", "8080", "HTTP server port")
 	redisAddr := flag.String("redis-addr", "localhost:6379", "Redis address")
 	limit := flag.Int("limit", 100, "Global requests per minute")
+	window := flag.Int("window", 60, "Time window for allowing requests in seconds")
 	flag.Parse()
 
 	fmt.Printf("Starting at :%s with limit %d\n", *port, *limit)
 	redisClient := redis.NewClient(&redis.Options{Addr: *redisAddr})
-	engine := limiter.NewRedisLimiter(redisClient, *limit, 60)
+	engine := limiter.NewRedisLimiter(redisClient, *limit, *window)
 
 	http.HandleFunc("/api/resource", func(w http.ResponseWriter, r *http.Request) {
 		userID := r.URL.Query().Get("user")
