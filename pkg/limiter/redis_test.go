@@ -2,6 +2,8 @@ package limiter
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -57,5 +59,42 @@ func TestRedisLimiter_Allow(t *testing.T) {
 	allowed, err = l.Allow(ctx, userID)
 	if !allowed || err != nil {
 		t.Error("expected allowed after window reset, got blocked")
+	}
+}
+
+func TestRedisLimiter_Concurrency(t *testing.T) {
+	mr, _ := miniredis.Run()
+	defer mr.Close()
+
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+
+	limit := 10
+	l := NewRedisLimiter(client, limit, 60)
+	ctx := context.Background()
+	userID := "concurrent-user"
+
+	var wg sync.WaitGroup
+	var allowedCount int32
+	totalRequests := 50
+
+	for i := 0; i < totalRequests; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			allowed, err := l.Allow(ctx, userID)
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+			if allowed {
+				atomic.AddInt32(&allowedCount, 1)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	if int(allowedCount) != limit {
+		t.Errorf("Expected exactly %d allowed requests, but got %d", limit, allowedCount)
 	}
 }
