@@ -48,7 +48,7 @@ func main() {
 }
 ```
 
-See `cmd/server/main.go` to see a working example.
+See `cmd/server/main.go` for a working example.
 
 ## Local Development & Testing
 
@@ -58,7 +58,7 @@ See `cmd/server/main.go` to see a working example.
 docker run --name rate-limit-redis -p 6379:6379 -d redis
 go run cmd/server/main.go --limit=5
 
-# Open a new terminal and run this to test the limiter
+# Open a new terminal and run this to test the limit
 for i in {1..6}; do curl "http://localhost:8080/api/resource?user=alice"; echo ""; done
 ```
 
@@ -67,7 +67,7 @@ for i in {1..6}; do curl "http://localhost:8080/api/resource?user=alice"; echo "
 # Start Redis and the Limiter Service
 docker-compose up --build
 
-# Test the limit (set to 5 in docker-compose.yml)
+# Open a new terminal and run this to test the limit (set to 5 in docker-compose.yml)
 for i in {1..6}; do curl "http://localhost:8080/api/resource?user=alice"; echo ""; done
 ```
 
